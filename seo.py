@@ -4,6 +4,7 @@ import csv
 import re
 import urlparse
 import sys
+from datetime import datetime
 
 #0 行号
 #1 访问时间
@@ -27,6 +28,17 @@ import sys
 #19 打开时间       newline[20]
 #20 停留时长       newline[21]
 #21 页面地址       newline[22]
+
+COL_DATE=0
+COL_TIME=1
+COL_IP =3
+COL_SOURCE=14   # 14, 15, 16, 17, 18, 19, 20
+                # 来源, 关键词, 搜索词, 计划, 单元, 注册, 手机
+COL_REG = 19
+COL_BIND=20
+COL_OPEN=21
+COL_COST=22
+COL_ACTIONS=23
 
 def extractInfo(query):
 
@@ -52,7 +64,13 @@ def extractSource(s,url):
         r = urlparse.parse_qs(q)
 
         if s.startswith('http'):
-            p1 = [u'外链',s,'']
+            r = urlparse.urlparse(s)
+            if r.netloc == 'zhidao.baidu.com' and r.query.find('zsyx')>-1:
+                # 分析知识营销外链 https://zhidao.baidu.com/question/692380938641169084.html?zsyx=nHnsnHbvrjndrj6kPHRLnHn4P19xPH0s
+                p1=[u'百度知识营销',r.netloc,s]
+            else:
+                p1 = [u'外链',r.netloc, s]
+
         elif s == u'直接访问':
             p1 = [u'直接访问','','']
             
@@ -113,14 +131,16 @@ def extractBinded(url):
 
 def extractFiels(files):
 
-    # 从列表写入csv文件: 13, 14, 15, 16, 17, 18, 19
+    # 从列表写入csv文件: 14, 15, 16, 17, 18, 19, 20
     s11 = [u'来源', u'关键词', u'搜索词', u'计划', u'单元', u'注册', u'手机']
     s12 = [i.encode('gbk') for i in s11]
 
     files_num = 0
+    files_changed = 0
     rows_num = 0
     # files = ['data1.csv', 'data2.csv']
-    file_last_row = []
+    file_last_time = ''
+    file_last_ips = []
 
     with open("test.csv","w") as csvfile:
         writer = csv.writer(csvfile)
@@ -135,6 +155,7 @@ def extractFiels(files):
             newline = []
             m = len(data)
             print 'f=%s,files_num=%d,m=%d' % (f, files_num, m)
+            print file_last_time, file_last_ips
             while i<m:
                 output = False
                 try:
@@ -158,16 +179,19 @@ def extractFiels(files):
                     source = line[18:19][0]
                     if i == 0:
                         s = line[18:19]+s12
-                        newline = line[1:12]+line[13:14]+s+line[19:]
+                        newline = line[0:12]+line[13:14]+s+line[19:]
                     else:
                         s = line[18:19]+extractSource(source, action)
+                        d, t = (line[1]).split(' ')
                         cost = extractCost(line[20:21][0])
-                        newline = line[1:12]+line[13:14]+s+line[19:20]+[cost]+line[21:]
+                        newline = [d]+line[1:12]+line[13:14]+s+line[19:20]+[cost]+line[21:]
                 else:
-                    newline[21] += extractCost(line[20])
-                    newline[22] += ',' + line[21]
-                    newline[18] = extractRegisted(action)
-                    newline[19] = extractBinded(action)            
+                    newline[COL_COST] += extractCost(line[20])
+                    newline[COL_ACTIONS] += ',' + line[21]
+                    if extractRegisted(action)=='1':
+                        newline[COL_REG] = '1'
+                    if  extractBinded(action)=='1':
+                        newline[COL_BIND] = '1'         
 
                 i = i + 1
 
@@ -175,18 +199,37 @@ def extractFiels(files):
                     # 后续文件的标题行跳过
                     if i==1 and files_num !=0: 
                         continue
-                    # 如果数据重复则跳过
-                    if files_num>0 and len(file_last_row)>0:
-                        if newline[0]>file_last_row[0]: continue
-                        if newline[0]==file_last_row[0] and newline[2]==file_last_row[2] : continue
-                        file_last_row = []
+                    if i>1 or files_num>0:
+                        # 如果数据重复则跳过
+                        newline_time = datetime.strptime(newline[COL_TIME],"%Y/%m/%d %H:%M")
+                        if files_changed>0:
+                            try:
+                                if newline_time>file_last_time: continue
+                                if newline_time==file_last_time and newline[COL_IP] in file_last_ips:
+                                    file_last_ips = file_last_ips[1:]
+                                    print 'repeat', rows_num, newline[COL_TIME], newline[COL_IP-1].decode('gbk'), newline[COL_IP]
+                                    continue
+                                file_last_time = ''
+                                file_last_ips=[]
+                                files_changed = 0
+                                print 'newfile', rows_num, newline[COL_TIME], newline[COL_IP-1].decode('gbk'), newline[COL_IP]
+                            except:
+                                print i-1, file_last_time, file_last_ips
+                                print newline
+                                raise
+
+                        if newline_time == file_last_time:
+                            file_last_ips.append(newline[COL_IP])
+                        else:
+                            file_last_time = newline_time
+                            file_last_ips=[newline[COL_IP]]
 
                     writer.writerow(newline)
                     rows_num = rows_num + 1
-                    print rows_num
+                    # print rows_num
 
             files_num = files_num + 1
-            file_last_row = newline
+            files_changed = 1
 
         csvfile.close()
 
